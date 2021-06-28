@@ -1,6 +1,6 @@
 use crate::hash_to_curve::htp_bls12381_g2;
 use ark_ec::{AffineCurve, PairingEngine};
-use ark_ff::{One, ToBytes, UniformRand, Zero};
+use ark_ff::{Field, One, ToBytes, UniformRand, Zero};
 use ark_poly::{univariate::DensePolynomial, Polynomial, UVPolynomial};
 use ark_serialize::CanonicalSerialize;
 use chacha20::cipher::{NewStreamCipher, SyncStreamCipher};
@@ -18,7 +18,6 @@ type G1<P: ThresholdEncryptionParameters> = <P::E as PairingEngine>::G1Affine;
 type G2<P: ThresholdEncryptionParameters> = <P::E as PairingEngine>::G2Affine;
 type Fr<P: ThresholdEncryptionParameters> =
     <<P::E as PairingEngine>::G1Affine as AffineCurve>::ScalarField;
-
 
 #[derive(Clone, Debug)]
 pub struct Ciphertext<P: ThresholdEncryptionParameters> {
@@ -70,19 +69,15 @@ fn setup<R: RngCore, P: ThresholdEncryptionParameters>(
     let g = G1::<P>::prime_subgroup_generator();
     let h = G2::<P>::prime_subgroup_generator();
 
-    let a = Fr::<P>::rand(rng);
-    let pubkey = g.mul(a);
-    let privkey = h.mul(a);
-
-    // TODO: generate shares
-
     assert!(shares_num >= threshold);
     let threshold_poly = DensePolynomial::<Fr<P>>::rand(threshold - 1, rng);
     let mut pubkey_shares: Vec<G1<P>> = vec![];
     let mut privkey_shares = vec![];
+
     for i in 1..=shares_num {
         let pt = <Fr<P> as From<u64>>::from(i as u64);
         let privkey_coeff = threshold_poly.evaluate(&pt);
+
         pubkey_shares.push(g.mul(privkey_coeff).into());
 
         let privkey = PrivkeyShare::<P> {
@@ -92,6 +87,12 @@ fn setup<R: RngCore, P: ThresholdEncryptionParameters>(
         };
         privkey_shares.push(privkey);
     }
+
+    let z = Fr::<P>::zero();
+    let x = threshold_poly.evaluate(&z);
+    let pubkey = g.mul(x);
+    let privkey = h.mul(x);
+
     (pubkey.into(), privkey.into(), privkey_shares)
 }
 
@@ -109,8 +110,6 @@ fn encrypt<R: RngCore, P: ThresholdEncryptionParameters>(
 
     let u = g.mul(r).into();
 
-    print!("s = {:?}", s);
-
     let mut prf_key = Vec::new();
     s.write(&mut prf_key).unwrap();
     let mut blake_params = blake2b_simd::Params::new();
@@ -119,8 +118,6 @@ fn encrypt<R: RngCore, P: ThresholdEncryptionParameters>(
     prf_key.write(&mut hasher).unwrap();
     let mut prf_key_32 = [0u8; 32];
     prf_key_32.clone_from_slice(hasher.finalize().as_bytes());
-
-    println!("prf_key_32 = {:?}", prf_key_32);
 
     let chacha_nonce = Nonce::from_slice(b"secret nonce");
     let mut cipher = ChaCha20::new(Key::from_slice(&prf_key_32), chacha_nonce);
@@ -186,31 +183,18 @@ fn share_combine<P: ThresholdEncryptionParameters>(
     c: Ciphertext<P>,
     shares: Vec<DecryptionShare<P>>,
 ) -> Vec<u8> {
-    let mut stream_cipher_key_curve_elem: <<P as ThresholdEncryptionParameters>::E as PairingEngine>::Fqk = <<P as ThresholdEncryptionParameters>::E as PairingEngine>::Fqk::zero();
+    let mut stream_cipher_key_curve_elem: <<P as ThresholdEncryptionParameters>::E as PairingEngine>::Fqk = <<P as ThresholdEncryptionParameters>::E as PairingEngine>::Fqk::one();
     for sh in shares.iter() {
-        let mut lagrange_coeff: <<P as ThresholdEncryptionParameters>::E as PairingEngine>::Fqk =
-            <<P as ThresholdEncryptionParameters>::E as PairingEngine>::Fqk::one();
-        let ji =
-            <<<P as ThresholdEncryptionParameters>::E as PairingEngine>::Fqk as From<u64>>::from(
-                sh.decryptor_index as u64,
-            );
+        let mut lagrange_coeff: Fr<P> = Fr::<P>::one();
+        let ji = <Fr<P> as From<u64>>::from(sh.decryptor_index as u64);
         for i in shares.iter() {
-            let ii = <<<P as ThresholdEncryptionParameters>::E as PairingEngine>::Fqk as From<
-                u64,
-            >>::from(i.decryptor_index as u64);
+            let ii = <Fr<P> as From<u64>>::from(i.decryptor_index as u64);
             if ii != ji {
-                lagrange_coeff *=
-                    (<<P as ThresholdEncryptionParameters>::E as PairingEngine>::Fqk::zero()
-                        - (ii))
-                        / (ji - ii);
+                lagrange_coeff *= (Fr::<P>::zero() - (ii)) / (ji - ii);
             }
         }
-        stream_cipher_key_curve_elem =
-            stream_cipher_key_curve_elem + sh.decryption_share * lagrange_coeff;
+        stream_cipher_key_curve_elem *= sh.decryption_share.pow(lagrange_coeff.into());
     }
-
-    // TODO: we don't get the expected result after lagrange interpolation
-    print!("stream_cipher_key_curve_elem = {:?}", stream_cipher_key_curve_elem);
 
     let mut prf_key = Vec::new();
     stream_cipher_key_curve_elem.write(&mut prf_key).unwrap();
@@ -220,8 +204,6 @@ fn share_combine<P: ThresholdEncryptionParameters>(
     prf_key.write(&mut hasher).unwrap();
     let mut prf_key_32 = [0u8; 32];
     prf_key_32.clone_from_slice(hasher.finalize().as_bytes());
-
-    println!("prf_key_32 = {:?}", prf_key_32);
 
     let chacha_nonce = Nonce::from_slice(b"secret nonce");
     let mut cipher = ChaCha20::new(Key::from_slice(&prf_key_32), chacha_nonce);
@@ -258,6 +240,7 @@ mod tests {
         let (pubkey, privkey, _) = setup::<ark_std::rand::rngs::StdRng, TestingParameters>(
             &mut rng, threshold, shares_num,
         );
+
         let ciphertext =
             encrypt::<ark_std::rand::rngs::StdRng, TestingParameters>(msg, pubkey, &mut rng);
         let plaintext = decrypt(ciphertext, privkey);
@@ -272,9 +255,10 @@ mod tests {
         let shares_num = 5;
         let msg: &[u8] = "abc".as_bytes();
 
-        let (pubkey, privkey, privkey_shares) = setup::<ark_std::rand::rngs::StdRng, TestingParameters>(
-            &mut rng, threshold, shares_num,
-        );
+        let (pubkey, privkey, privkey_shares) = setup::<
+            ark_std::rand::rngs::StdRng,
+            TestingParameters,
+        >(&mut rng, threshold, shares_num);
         let ciphertext =
             encrypt::<ark_std::rand::rngs::StdRng, TestingParameters>(msg, pubkey, &mut rng);
 
