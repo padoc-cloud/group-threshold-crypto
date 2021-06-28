@@ -32,7 +32,7 @@ pub struct DecryptionShare<P: ThresholdEncryptionParameters> {
     pub decryption_share: <<P as ThresholdEncryptionParameters>::E as PairingEngine>::Fqk,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Copy)]
 pub struct PrivkeyShare<P: ThresholdEncryptionParameters> {
     pub index: usize,
     pub privkey: G2<P>,
@@ -57,7 +57,7 @@ fn construct_tag_hash<P: ThresholdEncryptionParameters>(
     hash_to_g2(&hash_input)
 }
 
-fn setup<R: RngCore, P: ThresholdEncryptionParameters>(
+pub fn setup<R: RngCore, P: ThresholdEncryptionParameters>(
     rng: &mut R,
     threshold: usize,
     shares_num: usize,
@@ -96,7 +96,7 @@ fn setup<R: RngCore, P: ThresholdEncryptionParameters>(
     (pubkey.into(), privkey.into(), privkey_shares)
 }
 
-fn encrypt<R: RngCore, P: ThresholdEncryptionParameters>(
+pub fn encrypt<R: RngCore, P: ThresholdEncryptionParameters>(
     message: &[u8],
     pubkey: <<P as ThresholdEncryptionParameters>::E as PairingEngine>::G1Affine,
     rng: &mut R,
@@ -133,13 +133,13 @@ fn encrypt<R: RngCore, P: ThresholdEncryptionParameters>(
     }
 }
 
-fn check_ciphertext_validity<P: ThresholdEncryptionParameters>(c: Ciphertext<P>) -> bool {
+pub fn check_ciphertext_validity<P: ThresholdEncryptionParameters>(c: Ciphertext<P>) -> bool {
     let g_inv = -G1::<P>::prime_subgroup_generator();
     // TODO: P::E::product_of_pairings(&[]) == ;
     true
 }
 
-fn decrypt<P: ThresholdEncryptionParameters>(
+pub fn decrypt<P: ThresholdEncryptionParameters>(
     ciphertext: Ciphertext<P>,
     privkey: <<P as ThresholdEncryptionParameters>::E as PairingEngine>::G2Affine,
 ) -> Vec<u8> {
@@ -164,7 +164,7 @@ fn decrypt<P: ThresholdEncryptionParameters>(
     plaintext
 }
 
-fn create_share<P: ThresholdEncryptionParameters>(
+pub fn create_share<P: ThresholdEncryptionParameters>(
     ciphertext: &Ciphertext<P>,
     privkey_share: PrivkeyShare<P>,
 ) -> DecryptionShare<P> {
@@ -179,7 +179,7 @@ fn create_share<P: ThresholdEncryptionParameters>(
     }
 }
 
-fn share_combine<P: ThresholdEncryptionParameters>(
+pub fn share_combine<P: ThresholdEncryptionParameters>(
     c: Ciphertext<P>,
     shares: Vec<DecryptionShare<P>>,
 ) -> Vec<u8> {
@@ -268,7 +268,6 @@ mod tests {
         }
         let plaintext = share_combine(ciphertext, shares);
 
-        print!("plaintext = {:?}", plaintext);
         assert!(plaintext == msg)
     }
 }
