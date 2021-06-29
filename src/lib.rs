@@ -7,6 +7,8 @@ use chacha20::cipher::{NewStreamCipher, SyncStreamCipher};
 use chacha20::{ChaCha20, Key, Nonce};
 use rand_core::RngCore;
 use std::usize;
+use rayon::prelude::*;
+use thiserror::Error;
 
 mod hash_to_curve;
 
@@ -18,6 +20,24 @@ type G1<P: ThresholdEncryptionParameters> = <P::E as PairingEngine>::G1Affine;
 type G2<P: ThresholdEncryptionParameters> = <P::E as PairingEngine>::G2Affine;
 type Fr<P: ThresholdEncryptionParameters> =
     <<P::E as PairingEngine>::G1Affine as AffineCurve>::ScalarField;
+
+#[derive(Debug, Error)]
+pub enum ThresholdEncryptionError {
+    /// Error
+    #[error("ciphertext verification failed")]
+    CiphertextVerificationFailed,
+
+    /// Error
+    #[error("Decryption share verification failed")]
+    DecryptionShareVerificationFailed,
+
+    /// Hashing to curve failed
+    #[error("Could not hash to curve")]
+    HashToCurveError,
+
+    #[error("plaintext verification failed")]
+    PlaintextVerificationFailed,
+}
 
 #[derive(Clone, Debug)]
 pub struct Ciphertext<P: ThresholdEncryptionParameters> {
@@ -133,10 +153,11 @@ pub fn encrypt<R: RngCore, P: ThresholdEncryptionParameters>(
     }
 }
 
-pub fn check_ciphertext_validity<P: ThresholdEncryptionParameters>(c: Ciphertext<P>) -> bool {
-    let g_inv = -G1::<P>::prime_subgroup_generator();
-    // TODO: P::E::product_of_pairings(&[]) == ;
-    true
+pub fn check_ciphertext_validity<P: ThresholdEncryptionParameters>(c: &Ciphertext<P>) -> bool {
+    let g_inv = <P::E as PairingEngine>::G1Prepared::from(-G1::<P>::prime_subgroup_generator());
+    let hash_g2 = <P::E as PairingEngine>::G2Prepared::from(construct_tag_hash::<P>(c.nonce, &c.ciphertext[..]));
+
+    P::E::product_of_pairings(&[(<P::E as PairingEngine>::G1Prepared::from(c.nonce), hash_g2), (g_inv, <P::E as PairingEngine>::G2Prepared::from(c.auth_tag))]) == <<P as ThresholdEncryptionParameters>::E as PairingEngine>::Fqk::one()
 }
 
 pub fn decrypt<P: ThresholdEncryptionParameters>(
@@ -166,7 +187,7 @@ pub fn decrypt<P: ThresholdEncryptionParameters>(
 
 pub fn create_share<P: ThresholdEncryptionParameters>(
     ciphertext: &Ciphertext<P>,
-    privkey_share: PrivkeyShare<P>,
+    privkey_share: &PrivkeyShare<P>,
 ) -> DecryptionShare<P> {
     let decryption_share = P::E::product_of_pairings(&[(
         <P::E as PairingEngine>::G1Prepared::from(ciphertext.nonce),
@@ -179,11 +200,14 @@ pub fn create_share<P: ThresholdEncryptionParameters>(
     }
 }
 
-pub fn share_combine<P: ThresholdEncryptionParameters>(
-    c: Ciphertext<P>,
-    shares: Vec<DecryptionShare<P>>,
-) -> Vec<u8> {
+pub fn share_combine_no_check<P: ThresholdEncryptionParameters>(
+    c: &Ciphertext<P>,
+    shares: &Vec<DecryptionShare<P>>,
+) -> Result<Vec<u8>, ThresholdEncryptionError> {
+
+
     let mut stream_cipher_key_curve_elem: <<P as ThresholdEncryptionParameters>::E as PairingEngine>::Fqk = <<P as ThresholdEncryptionParameters>::E as PairingEngine>::Fqk::one();
+
     for sh in shares.iter() {
         let mut lagrange_coeff: Fr<P> = Fr::<P>::one();
         let ji = <Fr<P> as From<u64>>::from(sh.decryptor_index as u64);
@@ -216,8 +240,67 @@ pub fn share_combine<P: ThresholdEncryptionParameters>(
     plaintext.clone_from_slice(&c.ciphertext[..]);
     cipher.apply_keystream(&mut plaintext);
 
-    plaintext
+    Ok(plaintext)
 }
+
+pub fn share_combine<P: ThresholdEncryptionParameters>(
+    c: &Ciphertext<P>,
+    shares: &Vec<DecryptionShare<P>>,
+) -> Result<Vec<u8>, ThresholdEncryptionError> {
+    if !check_ciphertext_validity(&c) {
+        return Err(ThresholdEncryptionError::CiphertextVerificationFailed);
+    }
+
+    share_combine_no_check::<P>(c, shares)
+}
+
+pub fn batch_share_combine<'a, P: 'static + ThresholdEncryptionParameters>(
+    ciphertexts: Vec<Ciphertext<P>>,
+    // additional_data: Vec<&[u8]>,
+    shares: Vec<Vec<DecryptionShare<P>>>,
+) -> Result<Vec<Vec<u8>>, ThresholdEncryptionError> {
+    // We first check for ciphertext validity across ciphertexts: `e(-G, W_1) * e(U_1, H_1) * e(-G, W_2) * e(U_2, H_2) * ...`
+    // We use an optimisation based on the billinearity property that implies: `\prod{e(-G, W_i)} = e(-G, \sum{W_i})`
+    let g_inv = <P::E as PairingEngine>::G1Prepared::from(-G1::<P>::prime_subgroup_generator());
+    let mut pairing_product: Vec<(
+        <P::E as PairingEngine>::G1Prepared,
+        <P::E as PairingEngine>::G2Prepared,
+    )> = vec![];
+    let mut auth_tag_sum: <P::E as PairingEngine>::G2Affine =
+        <P::E as PairingEngine>::G2Affine::zero();
+
+    ciphertexts
+        .par_iter()
+        .map(|c| {
+            (
+                c.nonce.into(),
+                construct_tag_hash::<P>(c.nonce, &c.ciphertext[..]).into(),
+            )
+        })
+        .collect_into_vec(&mut pairing_product);
+
+    for c in ciphertexts.iter() {
+        auth_tag_sum = auth_tag_sum + c.auth_tag;
+    }
+    pairing_product.push((g_inv, auth_tag_sum.into()));
+
+    let pairing_prod_result = P::E::product_of_pairings(&pairing_product[..]);
+    if pairing_prod_result != <<P as ThresholdEncryptionParameters>::E as PairingEngine>::Fqk::one()
+    {
+        return Err(ThresholdEncryptionError::CiphertextVerificationFailed);
+    }
+
+    // Decrypting each ciphertext
+    let mut plaintexts: Vec<Vec<u8>> = Vec::with_capacity(ciphertexts.len());
+    ciphertexts
+        .par_iter()
+        .zip(shares.par_iter())
+        .map(|(c, sh)| share_combine_no_check(c, sh).unwrap().to_vec())
+        .collect_into_vec(&mut plaintexts);
+
+    Ok(plaintexts)
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -264,10 +347,49 @@ mod tests {
 
         let mut shares: Vec<DecryptionShare<TestingParameters>> = vec![];
         for privkey_share in privkey_shares {
-            shares.push(create_share(&ciphertext, privkey_share));
+            shares.push(create_share(&ciphertext, &privkey_share));
         }
-        let plaintext = share_combine(ciphertext, shares);
+        let plaintext = share_combine(&ciphertext, &shares).unwrap();
 
         assert!(plaintext == msg)
     }
+
+    #[test]
+    fn batch_share_combine_test() {
+        let mut rng = test_rng();
+        let threshold = 3;
+        let shares_num = 5;
+        let num_of_msgs = 4;
+
+        let (pubkey, _, privkey_shares) = setup::<
+            ark_std::rand::rngs::StdRng,
+            TestingParameters,
+        >(&mut rng, threshold, shares_num);
+
+        let mut messages: Vec<[u8; 8]> = vec![];
+        let mut ad: Vec<&[u8]> = vec![];
+        let mut ciphertexts: Vec<Ciphertext<TestingParameters>> = vec![];
+        let mut dec_shares: Vec<Vec<DecryptionShare<TestingParameters>>> =
+            Vec::with_capacity(ciphertexts.len());
+        for j in 0..num_of_msgs {
+            ad.push("".as_bytes());
+            let mut msg: [u8; 8] = [0u8; 8];
+            rng.fill_bytes(&mut msg);
+            messages.push(msg.clone());
+
+            ciphertexts.push(encrypt(&messages[j], pubkey, &mut rng));
+
+            dec_shares.push(Vec::with_capacity(shares_num));
+            for privkey_share in &privkey_shares {
+                dec_shares[j].push(create_share(&ciphertexts[j], privkey_share));
+            }
+        }
+
+        let plaintexts = batch_share_combine(ciphertexts, dec_shares).unwrap();
+        assert!(plaintexts.len() != 0);
+        for (p, m) in plaintexts.into_iter().zip(messages) {
+            assert!(*p == m)
+        }
+    }
+
 }

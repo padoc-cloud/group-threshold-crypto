@@ -12,10 +12,12 @@ readme = "README.md"
 hex = "=0.4.3"
 rand_core = { version = "=0.5" }
 rand = "=0.7.3"
+rayon = "=1.5.0"
+thiserror = "=1.0.14"
+
 blake2b_simd = "0.5.11"
 miracl_core = "=2.3.0"
 chacha20 = "=0.6.0"
-
 ark-ff = "=0.2.0"
 ark-ec = "=0.2.0"
 ark-poly = "=0.2.0"
