@@ -6,11 +6,13 @@ use ark_serialize::CanonicalSerialize;
 use chacha20::cipher::{NewStreamCipher, SyncStreamCipher};
 use chacha20::{ChaCha20, Key, Nonce};
 use rand_core::RngCore;
-use std::usize;
 use rayon::prelude::*;
+use std::usize;
 use thiserror::Error;
 
+mod ec_fft;
 mod hash_to_curve;
+mod subproductdomain;
 
 pub trait ThresholdEncryptionParameters {
     type E: PairingEngine;
@@ -155,9 +157,15 @@ pub fn encrypt<R: RngCore, P: ThresholdEncryptionParameters>(
 
 pub fn check_ciphertext_validity<P: ThresholdEncryptionParameters>(c: &Ciphertext<P>) -> bool {
     let g_inv = <P::E as PairingEngine>::G1Prepared::from(-G1::<P>::prime_subgroup_generator());
-    let hash_g2 = <P::E as PairingEngine>::G2Prepared::from(construct_tag_hash::<P>(c.nonce, &c.ciphertext[..]));
+    let hash_g2 = <P::E as PairingEngine>::G2Prepared::from(construct_tag_hash::<P>(
+        c.nonce,
+        &c.ciphertext[..],
+    ));
 
-    P::E::product_of_pairings(&[(<P::E as PairingEngine>::G1Prepared::from(c.nonce), hash_g2), (g_inv, <P::E as PairingEngine>::G2Prepared::from(c.auth_tag))]) == <<P as ThresholdEncryptionParameters>::E as PairingEngine>::Fqk::one()
+    P::E::product_of_pairings(&[
+        (<P::E as PairingEngine>::G1Prepared::from(c.nonce), hash_g2),
+        (g_inv, <P::E as PairingEngine>::G2Prepared::from(c.auth_tag)),
+    ]) == <<P as ThresholdEncryptionParameters>::E as PairingEngine>::Fqk::one()
 }
 
 pub fn decrypt<P: ThresholdEncryptionParameters>(
@@ -204,8 +212,6 @@ pub fn share_combine_no_check<P: ThresholdEncryptionParameters>(
     c: &Ciphertext<P>,
     shares: &Vec<DecryptionShare<P>>,
 ) -> Result<Vec<u8>, ThresholdEncryptionError> {
-
-
     let mut stream_cipher_key_curve_elem: <<P as ThresholdEncryptionParameters>::E as PairingEngine>::Fqk = <<P as ThresholdEncryptionParameters>::E as PairingEngine>::Fqk::one();
 
     for sh in shares.iter() {
@@ -301,7 +307,6 @@ pub fn batch_share_combine<'a, P: 'static + ThresholdEncryptionParameters>(
     Ok(plaintexts)
 }
 
-
 #[cfg(test)]
 mod tests {
     use crate::*;
@@ -361,10 +366,9 @@ mod tests {
         let shares_num = 5;
         let num_of_msgs = 4;
 
-        let (pubkey, _, privkey_shares) = setup::<
-            ark_std::rand::rngs::StdRng,
-            TestingParameters,
-        >(&mut rng, threshold, shares_num);
+        let (pubkey, _, privkey_shares) = setup::<ark_std::rand::rngs::StdRng, TestingParameters>(
+            &mut rng, threshold, shares_num,
+        );
 
         let mut messages: Vec<[u8; 8]> = vec![];
         let mut ad: Vec<&[u8]> = vec![];
@@ -391,5 +395,4 @@ mod tests {
             assert!(*p == m)
         }
     }
-
 }

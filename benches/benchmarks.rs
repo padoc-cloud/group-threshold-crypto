@@ -1,7 +1,7 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use group_threshold_cryptography::{
-    create_share, encrypt, batch_share_combine,
-    share_combine, setup, Ciphertext, DecryptionShare, ThresholdEncryptionParameters,
+    batch_share_combine, create_share, encrypt, setup, share_combine, Ciphertext, DecryptionShare,
+    ThresholdEncryptionParameters,
 };
 
 pub fn bench_decryption(c: &mut Criterion) {
@@ -21,7 +21,9 @@ pub fn bench_decryption(c: &mut Criterion) {
         let mut rng = rand::rngs::StdRng::seed_from_u64(0);
 
         let (pubkey, _, privkey_shares) = setup::<ark_std::rand::rngs::StdRng, TestingParameters>(
-            &mut rng, threshold, num_of_msgs,
+            &mut rng,
+            threshold,
+            num_of_msgs,
         );
 
         let mut messages: Vec<[u8; NUM_OF_TX]> = vec![];
@@ -33,7 +35,11 @@ pub fn bench_decryption(c: &mut Criterion) {
             rng.fill_bytes(&mut msg);
             messages.push(msg.clone());
 
-            ciphertexts.push(encrypt::<ark_std::rand::rngs::StdRng, TestingParameters>(&messages[j], pubkey, &mut rng));
+            ciphertexts.push(encrypt::<ark_std::rand::rngs::StdRng, TestingParameters>(
+                &messages[j],
+                pubkey,
+                &mut rng,
+            ));
 
             dec_shares.push(Vec::with_capacity(threshold));
             for i in 0..threshold {
@@ -56,7 +62,9 @@ pub fn bench_decryption(c: &mut Criterion) {
     fn batch_share_combine_bench(threshold: usize, num_of_msgs: usize) -> impl Fn() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(0);
         let (pubkey, _, privkey_shares) = setup::<ark_std::rand::rngs::StdRng, TestingParameters>(
-            &mut rng, threshold, num_of_msgs,
+            &mut rng,
+            threshold,
+            num_of_msgs,
         );
 
         let mut messages: Vec<[u8; NUM_OF_TX]> = vec![];
@@ -103,8 +111,6 @@ pub fn bench_decryption(c: &mut Criterion) {
     group.bench_function("batch_share_combine: threshold 08 - #msg 1000", |b| {
         b.iter(|| a())
     });
-
-
 }
 
 criterion_group!(benches, bench_decryption);
