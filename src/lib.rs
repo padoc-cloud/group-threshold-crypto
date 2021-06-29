@@ -7,8 +7,11 @@ use chacha20::cipher::{NewStreamCipher, SyncStreamCipher};
 use chacha20::{ChaCha20, Key, Nonce};
 use rand_core::RngCore;
 use std::usize;
+use std::io::BufWriter;
 
 mod hash_to_curve;
+mod hash_to_field;
+use crate::hash_to_field::{hash_to_field, ExpandMsgXmd};
 
 pub trait ThresholdEncryptionParameters {
     type E: PairingEngine;
@@ -56,6 +59,12 @@ fn construct_tag_hash<P: ThresholdEncryptionParameters>(
 
     hash_to_g2(&hash_input)
 }
+
+// TODO:
+fn hash_to_scalar<P: ThresholdEncryptionParameters>(msg: &[u8], dst: &[u8]) -> Fr<P> {
+    hash_to_field::<Fr::<P>, ExpandMsgXmd<sha2::Sha256>>(msg, dst, 1)[0]
+}
+
 
 fn setup<R: RngCore, P: ThresholdEncryptionParameters>(
     rng: &mut R,
@@ -217,6 +226,28 @@ fn share_combine<P: ThresholdEncryptionParameters>(
     cipher.apply_keystream(&mut plaintext);
 
     plaintext
+}
+
+// TODO:
+pub fn sign<R: RngCore, P: ThresholdEncryptionParameters>(
+    message: &[u8],
+    pubkey: <<P as ThresholdEncryptionParameters>::E as PairingEngine>::G1Affine,
+    rng: &mut R,) -> (<<P as ThresholdEncryptionParameters>::E as PairingEngine>::Fqk, G2<P>) {
+
+    let k = Fr::<P>::rand(rng);
+    let g = G1::<P>::prime_subgroup_generator();
+    let h = G2::<P>::prime_subgroup_generator();
+
+    let r = P::E::product_of_pairings(&[(<P::E as PairingEngine>::G1Prepared::from(g.mul(k).into()), h.into())]);
+
+    let concat = r.write()
+    let c = hash_to_scalar();
+    (r,)
+}
+
+// TODO:
+pub fn verify_signature() {
+
 }
 
 #[cfg(test)]
