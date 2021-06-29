@@ -42,6 +42,12 @@ pub struct PrivkeyShare<P: ThresholdEncryptionParameters> {
     pub pubkey: G1<P>,
 }
 
+#[derive(Clone, Debug)]
+pub struct ThresholdSignature<P: ThresholdEncryptionParameters> {
+    r: <<P as ThresholdEncryptionParameters>::E as PairingEngine>::Fqk,
+    z: <<P as ThresholdEncryptionParameters>::E as PairingEngine>::G2Projective,
+}
+
 fn hash_to_g2<T: ark_serialize::CanonicalDeserialize>(message: &[u8]) -> T {
     let mut point_ser: Vec<u8> = Vec::new();
     let point = htp_bls12381_g2(message);
@@ -232,7 +238,8 @@ fn share_combine<P: ThresholdEncryptionParameters>(
 pub fn sign<R: RngCore, P: ThresholdEncryptionParameters>(
     message: &[u8],
     pubkey: <<P as ThresholdEncryptionParameters>::E as PairingEngine>::G1Affine,
-    rng: &mut R,) -> (<<P as ThresholdEncryptionParameters>::E as PairingEngine>::Fqk, G2<P>) {
+    privkey: <<P as ThresholdEncryptionParameters>::E as PairingEngine>::G2Affine,
+    rng: &mut R,) -> ThresholdSignature<P> {
 
     let k = Fr::<P>::rand(rng);
     let g = G1::<P>::prime_subgroup_generator();
@@ -240,14 +247,39 @@ pub fn sign<R: RngCore, P: ThresholdEncryptionParameters>(
 
     let r = P::E::product_of_pairings(&[(<P::E as PairingEngine>::G1Prepared::from(g.mul(k).into()), h.into())]);
 
-    let concat = r.write()
-    let c = hash_to_scalar();
-    (r,)
+    let concat: Vec<u8>;
+    r.write(concat);
+    pubkey.write(concat);
+    message.write(concat);
+
+    let c = hash_to_scalar(&concat, &vec![]);
+    let z = h.mul(k) + privkey.mul(c);
+    ThresholdSignature::<P> {
+        r,z
+    }
 }
 
 // TODO:
-pub fn verify_signature() {
+pub fn verify_signature<P: ThresholdEncryptionParameters>(
+    message: &[u8],
+    signature: ThresholdSignature<P>,
+    pubkey: <<P as ThresholdEncryptionParameters>::E as PairingEngine>::G1Affine) -> bool {
 
+    let concat: Vec<u8>;
+    signature.r.write(concat);
+    pubkey.write(concat);
+    message.write(concat);
+
+    let c = hash_to_scalar(&concat, &vec![]);
+
+    let g = G1::<P>::prime_subgroup_generator();
+    let h_inv = -G2::<P>::prime_subgroup_generator();
+    let r_new = P::E::product_of_pairings(&[
+        (<P::E as PairingEngine>::G1Prepared::from(g.into()), <P::E as PairingEngine>::G2Prepared::from(signature.z.into())),
+        (<P::E as PairingEngine>::G1Prepared::from(pubkey.mul(c).into()), <P::E as PairingEngine>::G2Prepared::from(h_inv)),
+    ]);
+
+    signature.r == r_new
 }
 
 #[cfg(test)]
