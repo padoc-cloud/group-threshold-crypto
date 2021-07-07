@@ -10,9 +10,7 @@ use rayon::prelude::*;
 use std::usize;
 use thiserror::Error;
 
-mod ec_fft;
 mod hash_to_curve;
-mod subproductdomain;
 
 pub trait ThresholdEncryptionParameters {
     type E: PairingEngine;
