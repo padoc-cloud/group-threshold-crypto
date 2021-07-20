@@ -52,6 +52,13 @@ pub struct DecryptionShare<P: ThresholdEncryptionParameters> {
     pub decryption_share: <<P as ThresholdEncryptionParameters>::E as PairingEngine>::Fqk,
 }
 
+#[derive(Debug, Clone)]
+pub struct FastDecryptionShare<P: ThresholdEncryptionParameters> {
+    pub decryptor_index: usize,
+    blinded_privkey_share: <<P as ThresholdEncryptionParameters>::E as PairingEngine>::G2Projective,
+    pub decryption_share: <<P as ThresholdEncryptionParameters>::E as PairingEngine>::G1Projective,
+}
+
 #[derive(Clone, Debug, Copy)]
 pub struct PrivkeyShare<P: ThresholdEncryptionParameters> {
     pub index: usize,
@@ -260,7 +267,6 @@ pub fn share_combine<P: ThresholdEncryptionParameters>(
 
 pub fn batch_share_combine<'a, P: 'static + ThresholdEncryptionParameters>(
     ciphertexts: Vec<Ciphertext<P>>,
-    // additional_data: Vec<&[u8]>,
     shares: Vec<Vec<DecryptionShare<P>>>,
 ) -> Result<Vec<Vec<u8>>, ThresholdEncryptionError> {
     // We first check for ciphertext validity across ciphertexts: `e(-G, W_1) * e(U_1, H_1) * e(-G, W_2) * e(U_2, H_2) * ...`
@@ -303,6 +309,74 @@ pub fn batch_share_combine<'a, P: 'static + ThresholdEncryptionParameters>(
         .collect_into_vec(&mut plaintexts);
 
     Ok(plaintexts)
+}
+
+pub fn fast_create_share<R: RngCore, P: ThresholdEncryptionParameters>(
+    ciphertext: &Ciphertext<P>,
+    privkey_share: &PrivkeyShare<P>,
+    rng: &mut R,
+) -> FastDecryptionShare<P> {
+    let blind = Fr::<P>::rand(rng);
+    let blinded_privkey_share = privkey_share.privkey.mul(blind);
+
+    let blind_inv = Fr::<P>::one() / blind;
+    let decryption_share = ciphertext.nonce.mul(blind_inv);
+
+    FastDecryptionShare {
+        decryptor_index: privkey_share.index,
+        blinded_privkey_share: blinded_privkey_share,
+        decryption_share,
+    }
+}
+
+pub fn fast_share_combine<P: ThresholdEncryptionParameters>(
+    c: &Ciphertext<P>,
+    shares: &Vec<FastDecryptionShare<P>>,
+) -> Result<Vec<u8>, ThresholdEncryptionError> {
+    let mut stream_cipher_key_curve_elem: <<P as ThresholdEncryptionParameters>::E as PairingEngine>::Fqk = <<P as ThresholdEncryptionParameters>::E as PairingEngine>::Fqk::one();
+
+    for sh in shares.iter() {
+        let mut lagrange_coeff: Fr<P> = Fr::<P>::one();
+        let ji = <Fr<P> as From<u64>>::from(sh.decryptor_index as u64);
+        for i in shares.iter() {
+            let ii = <Fr<P> as From<u64>>::from(i.decryptor_index as u64);
+            if ii != ji {
+                lagrange_coeff *= (Fr::<P>::zero() - (ii)) / (ji - ii);
+            }
+        }
+
+        let blah1 = <P::E as PairingEngine>::G1Prepared::from(sh.decryption_share.into());
+        let blah2 = <P::E as PairingEngine>::G2Prepared::from(
+            sh.blinded_privkey_share
+                .into()
+                .mul(lagrange_coeff.into())
+                .into(),
+        );
+        let s_i = P::E::product_of_pairings(&[(blah1, blah2)]);
+        stream_cipher_key_curve_elem *= s_i;
+    }
+
+    let mut prf_key = Vec::new();
+    stream_cipher_key_curve_elem.write(&mut prf_key).unwrap();
+    let mut blake_params = blake2b_simd::Params::new();
+    blake_params.hash_length(32);
+    let mut hasher = blake_params.to_state();
+    prf_key.write(&mut hasher).unwrap();
+    let mut prf_key_32 = [0u8; 32];
+    prf_key_32.clone_from_slice(hasher.finalize().as_bytes());
+
+    let chacha_nonce = Nonce::from_slice(b"secret nonce");
+    let mut cipher = ChaCha20::new(Key::from_slice(&prf_key_32), chacha_nonce);
+
+    let mut plaintext = Vec::with_capacity(c.ciphertext.len());
+    for _ in 0..c.ciphertext.len() {
+        plaintext.push(Default::default());
+    }
+
+    plaintext.clone_from_slice(&c.ciphertext[..]);
+    cipher.apply_keystream(&mut plaintext);
+
+    Ok(plaintext)
 }
 
 #[cfg(test)]
@@ -392,5 +466,28 @@ mod tests {
         for (p, m) in plaintexts.into_iter().zip(messages) {
             assert!(*p == m)
         }
+    }
+
+    #[test]
+    fn fast_share_combine_test() {
+        let mut rng = test_rng();
+        let threshold = 3;
+        let shares_num = 5;
+        let msg: &[u8] = "abc".as_bytes();
+
+        let (pubkey, privkey, privkey_shares) = setup::<
+            ark_std::rand::rngs::StdRng,
+            TestingParameters,
+        >(&mut rng, threshold, shares_num);
+        let ciphertext =
+            encrypt::<ark_std::rand::rngs::StdRng, TestingParameters>(msg, pubkey, &mut rng);
+
+        let mut shares: Vec<FastDecryptionShare<TestingParameters>> = vec![];
+        for privkey_share in privkey_shares {
+            shares.push(fast_create_share(&ciphertext, &privkey_share, &mut rng));
+        }
+        let plaintext = fast_share_combine(&ciphertext, &shares).unwrap();
+
+        assert!(plaintext == msg)
     }
 }
