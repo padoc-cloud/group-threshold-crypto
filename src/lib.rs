@@ -335,26 +335,54 @@ pub fn fast_share_combine<P: ThresholdEncryptionParameters>(
 ) -> Result<Vec<u8>, ThresholdEncryptionError> {
     let mut stream_cipher_key_curve_elem: <<P as ThresholdEncryptionParameters>::E as PairingEngine>::Fqk = <<P as ThresholdEncryptionParameters>::E as PairingEngine>::Fqk::one();
 
-    for sh in shares.iter() {
-        let mut lagrange_coeff: Fr<P> = Fr::<P>::one();
-        let ji = <Fr<P> as From<u64>>::from(sh.decryptor_index as u64);
-        for i in shares.iter() {
-            let ii = <Fr<P> as From<u64>>::from(i.decryptor_index as u64);
-            if ii != ji {
-                lagrange_coeff *= (Fr::<P>::zero() - (ii)) / (ji - ii);
+    let mut s_i= Vec::with_capacity(shares.len());
+    shares.par_iter().map(|sh|
+        {
+            let mut lagrange_coeff: Fr<P> = Fr::<P>::one();
+            let ji = <Fr<P> as From<u64>>::from(sh.decryptor_index as u64);
+            for i in shares.iter() {
+                let ii = <Fr<P> as From<u64>>::from(i.decryptor_index as u64);
+                if ii != ji {
+                    lagrange_coeff *= (Fr::<P>::zero() - (ii)) / (ji - ii);
+                }
             }
-        }
 
-        let blah1 = <P::E as PairingEngine>::G1Prepared::from(sh.decryption_share.into());
-        let blah2 = <P::E as PairingEngine>::G2Prepared::from(
-            sh.blinded_privkey_share
-                .into()
-                .mul(lagrange_coeff.into())
-                .into(),
-        );
-        let s_i = P::E::product_of_pairings(&[(blah1, blah2)]);
-        stream_cipher_key_curve_elem *= s_i;
+            let blah1 = <P::E as PairingEngine>::G1Prepared::from(sh.decryption_share.into());
+            let blah2 = <P::E as PairingEngine>::G2Prepared::from(
+                sh.blinded_privkey_share
+                    .into()
+                    .mul(lagrange_coeff.into())
+                    .into(),
+            );
+            let s_i = P::E::product_of_pairings(&[(blah1, blah2)]);
+            s_i
+        }
+    ).collect_into_vec(&mut s_i);
+
+    for s in s_i {
+        stream_cipher_key_curve_elem *= s;
     }
+
+    // for sh in shares.iter() {
+    //     let mut lagrange_coeff: Fr<P> = Fr::<P>::one();
+    //     let ji = <Fr<P> as From<u64>>::from(sh.decryptor_index as u64);
+    //     for i in shares.iter() {
+    //         let ii = <Fr<P> as From<u64>>::from(i.decryptor_index as u64);
+    //         if ii != ji {
+    //             lagrange_coeff *= (Fr::<P>::zero() - (ii)) / (ji - ii);
+    //         }
+    //     }
+
+    //     let blah1 = <P::E as PairingEngine>::G1Prepared::from(sh.decryption_share.into());
+    //     let blah2 = <P::E as PairingEngine>::G2Prepared::from(
+    //         sh.blinded_privkey_share
+    //             .into()
+    //             .mul(lagrange_coeff.into())
+    //             .into(),
+    //     );
+    //     let s_i = P::E::product_of_pairings(&[(blah1, blah2)]);
+    //     stream_cipher_key_curve_elem *= s_i;
+    // }
 
     let mut prf_key = Vec::new();
     stream_cipher_key_curve_elem.write(&mut prf_key).unwrap();
