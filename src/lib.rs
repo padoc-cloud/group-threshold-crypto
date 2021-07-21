@@ -1,4 +1,5 @@
 use crate::hash_to_curve::htp_bls12381_g2;
+use crate::subproductdomain::SubproductDomain;
 use ark_ec::{AffineCurve, PairingEngine};
 use ark_ff::{Field, One, ToBytes, UniformRand, Zero};
 use ark_poly::{univariate::DensePolynomial, Polynomial, UVPolynomial};
@@ -11,6 +12,7 @@ use std::usize;
 use thiserror::Error;
 
 mod hash_to_curve;
+mod subproductdomain;
 
 pub trait ThresholdEncryptionParameters {
     type E: PairingEngine;
@@ -335,9 +337,27 @@ pub fn fast_share_combine<P: ThresholdEncryptionParameters>(
 ) -> Result<Vec<u8>, ThresholdEncryptionError> {
     let mut stream_cipher_key_curve_elem: <<P as ThresholdEncryptionParameters>::E as PairingEngine>::Fqk = <<P as ThresholdEncryptionParameters>::E as PairingEngine>::Fqk::one();
 
-    let mut s_i= Vec::with_capacity(shares.len());
-    shares.par_iter().map(|sh|
-        {
+    // let rng = &mut ark_std::test_rng();
+    // for d in 1..100 {
+    //     let mut points = vec![];
+    //     let mut evals = vec![];
+    //     for _ in 0..d {
+    //         points.push(Fr::rand(rng));
+    //         evals.push(Fr::rand(rng));
+    //     }
+
+    //     let s = SubproductDomain::<Fr>::new(points);
+    //     let p = s.interpolate(&evals);
+
+    //     for (x, y) in s.u.iter().zip(evals.iter()) {
+    //         assert_eq!(p.evaluate(x), *y)
+    //     }
+    // }
+
+    let mut s_i = Vec::with_capacity(shares.len());
+    shares
+        .par_iter()
+        .map(|sh| {
             let mut lagrange_coeff: Fr<P> = Fr::<P>::one();
             let ji = <Fr<P> as From<u64>>::from(sh.decryptor_index as u64);
             for i in shares.iter() {
@@ -346,43 +366,36 @@ pub fn fast_share_combine<P: ThresholdEncryptionParameters>(
                     lagrange_coeff *= (Fr::<P>::zero() - (ii)) / (ji - ii);
                 }
             }
+            println!("lagrange_coeff = {:?}", lagrange_coeff);
 
-            let blah1 = <P::E as PairingEngine>::G1Prepared::from(sh.decryption_share.into());
-            let blah2 = <P::E as PairingEngine>::G2Prepared::from(
+            let mut points = shares
+                .into_iter()
+                .map(|p| <Fr<P> as From<u64>>::from(p.decryptor_index as u64))
+                .collect();
+            let mut evals: Vec<
+                <<P as ThresholdEncryptionParameters>::E as PairingEngine>::G1Projective,
+            > = shares.into_iter().map(|p| p.decryption_share).collect();
+            let s = SubproductDomain::<Fr<P>, P>::new(points);
+            let p = s.interpolate(&mut &evals[..]);
+            let res = p.evaluate(&Fr::<P>::zero());
+
+            println!("res = {:?}", res);
+            let p1 = <P::E as PairingEngine>::G1Prepared::from(sh.decryption_share.into());
+            let p2 = <P::E as PairingEngine>::G2Prepared::from(
                 sh.blinded_privkey_share
                     .into()
-                    .mul(lagrange_coeff.into())
+                    // .mul(lagrange_coeff.into())
+                    .mul(res.into())
                     .into(),
             );
-            let s_i = P::E::product_of_pairings(&[(blah1, blah2)]);
+            let s_i = P::E::product_of_pairings(&[(p1, p2)]);
             s_i
-        }
-    ).collect_into_vec(&mut s_i);
+        })
+        .collect_into_vec(&mut s_i);
 
     for s in s_i {
         stream_cipher_key_curve_elem *= s;
     }
-
-    // for sh in shares.iter() {
-    //     let mut lagrange_coeff: Fr<P> = Fr::<P>::one();
-    //     let ji = <Fr<P> as From<u64>>::from(sh.decryptor_index as u64);
-    //     for i in shares.iter() {
-    //         let ii = <Fr<P> as From<u64>>::from(i.decryptor_index as u64);
-    //         if ii != ji {
-    //             lagrange_coeff *= (Fr::<P>::zero() - (ii)) / (ji - ii);
-    //         }
-    //     }
-
-    //     let blah1 = <P::E as PairingEngine>::G1Prepared::from(sh.decryption_share.into());
-    //     let blah2 = <P::E as PairingEngine>::G2Prepared::from(
-    //         sh.blinded_privkey_share
-    //             .into()
-    //             .mul(lagrange_coeff.into())
-    //             .into(),
-    //     );
-    //     let s_i = P::E::product_of_pairings(&[(blah1, blah2)]);
-    //     stream_cipher_key_curve_elem *= s_i;
-    // }
 
     let mut prf_key = Vec::new();
     stream_cipher_key_curve_elem.write(&mut prf_key).unwrap();

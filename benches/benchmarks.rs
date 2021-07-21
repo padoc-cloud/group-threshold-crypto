@@ -1,5 +1,8 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use group_threshold_cryptography::{Ciphertext, DecryptionShare, FastDecryptionShare, ThresholdEncryptionParameters, batch_share_combine, create_share, encrypt, fast_create_share, fast_share_combine, setup, share_combine};
+use group_threshold_cryptography::{
+    batch_share_combine, create_share, encrypt, fast_create_share, fast_share_combine, setup,
+    share_combine, Ciphertext, DecryptionShare, FastDecryptionShare, ThresholdEncryptionParameters,
+};
 
 pub fn bench_decryption(c: &mut Criterion) {
     use rand::SeedableRng;
@@ -119,7 +122,11 @@ pub fn bench_decryption(c: &mut Criterion) {
 
             dec_shares.push(Vec::with_capacity(threshold));
             for i in 0..threshold {
-                dec_shares[j].push(fast_create_share(&ciphertexts[j], &privkey_shares[i], &mut rng));
+                dec_shares[j].push(fast_create_share(
+                    &ciphertexts[j],
+                    &privkey_shares[i],
+                    &mut rng,
+                ));
             }
         }
 
