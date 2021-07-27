@@ -12,7 +12,7 @@ pub struct BlindedKeyShares<E: PairingEngine> {
     pub blinding_key: E::G2Affine,                         // [b] H
     pub blinding_key_prepared: E::G2Prepared,              // [b] H
     pub blinded_key_shares: Vec<E::G2Affine>,              // [b] Z_{i, \omega_i}
-    pub window_tables: Vec<BlindedKeyShareWindowTable<E>>, // [b] Z_{i, \omega_i}
+    pub window_tables: Vec<BlindedKeyShareWindowTable<E>>, // [b*omega_i^-1] Z_{i, \omega_i}
 }
 
 impl<E: PairingEngine> BlindedKeyShares<E> {
@@ -55,17 +55,21 @@ impl<E: PairingEngine> BlindedKeyShares<E> {
         &self,
         window_size: usize,
         scalar_bits: usize,
+        domain_inv: &[E::Fr],
     ) -> Vec<BlindedKeyShareWindowTable<E>> {
-        self.blinded_key_shares
-            .par_iter()
-            .map(|key| BlindedKeyShareWindowTable::<E> {
+        izip!(self.blinded_key_shares.iter(), domain_inv.iter())
+            .map(|(key, omega_inv)| BlindedKeyShareWindowTable::<E> {
                 window_table: FixedBaseMSM::get_window_table(
                     scalar_bits,
                     window_size,
-                    key.into_projective(),
+                    key.mul(-*omega_inv),
                 ),
             })
             .collect::<Vec<_>>()
+    }
+    pub fn multiply_by_omega_inv(&mut self, domain_inv: &[E::Fr]) {
+        izip!(self.blinded_key_shares.iter_mut(), domain_inv.iter())
+            .for_each(|(key, omega_inv)| *key = key.mul(-*omega_inv).into_affine())
     }
 }
 #[derive(Clone)]

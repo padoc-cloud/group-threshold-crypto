@@ -16,20 +16,18 @@ impl<E: PairingEngine> PrivateDecryptionContext<E> {
             decryption_share,
         }
     }
-}
-
-impl<E: PairingEngine> PrivateDecryptionContext<E> {
     pub fn batch_verify_decryption_shares<R: RngCore>(
         &self,
-        ciphertexts_and_shares: &[(Ciphertext<E>, Vec<DecryptionShare<E>>)],
+        ciphertexts: &[Ciphertext<E>],
+        shares: &[Vec<DecryptionShare<E>>],
+        //ciphertexts_and_shares: &[(Ciphertext<E>, Vec<DecryptionShare<E>>)],
         rng: &mut R,
     ) -> bool {
-        let num_ciphertexts = ciphertexts_and_shares.len();
-        let num_shares = ciphertexts_and_shares[0].1.len();
+        let num_ciphertexts = ciphertexts.len();
+        let num_shares = shares[0].len();
 
         // Get [b_i] H for each of the decryption shares
-        let blinding_keys = ciphertexts_and_shares[0]
-            .1
+        let blinding_keys = shares[0]
             .iter()
             .map(|D| {
                 self.public_decryption_contexts[D.decryptor_index]
@@ -54,8 +52,8 @@ impl<E: PairingEngine> PrivateDecryptionContext<E> {
 
         // Compute \sum_j [ \sum_i \alpha_{i,j} ] U_j
         let sum_U_j = E::G1Prepared::from(
-            izip!(ciphertexts_and_shares.iter(), sum_alpha_i.iter())
-                .map(|((c, _), alpha_j)| c.nonce.mul(*alpha_j))
+            izip!(ciphertexts.iter(), sum_alpha_i.iter())
+                .map(|(c, alpha_j)| c.nonce.mul(*alpha_j))
                 .sum::<E::G1Projective>()
                 .into_affine(),
         );
@@ -66,7 +64,7 @@ impl<E: PairingEngine> PrivateDecryptionContext<E> {
         let mut sum_D_j = vec![E::G1Projective::zero(); num_shares];
 
         // sum_D_j = { [\sum_j \alpha_{i,j} ] D_i }
-        for ((_, D), alpha_j) in izip!(ciphertexts_and_shares.iter(), alpha_ij.iter()) {
+        for (D, alpha_j) in izip!(shares.iter(), alpha_ij.iter()) {
             for (sum_alpha_D_i, Dij, alpha) in izip!(sum_D_j.iter_mut(), D.iter(), alpha_j.iter()) {
                 *sum_alpha_D_i += Dij.decryption_share.mul(*alpha);
             }
