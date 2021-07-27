@@ -15,7 +15,6 @@ use thiserror::Error;
 mod ciphertext;
 mod hash_to_curve;
 mod subproductdomain;
-
 pub use ciphertext::*;
 mod key_share;
 pub use key_share::*;
