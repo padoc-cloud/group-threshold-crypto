@@ -105,19 +105,6 @@ pub fn bench_decryption(c: &mut Criterion) {
     let mut group = c.benchmark_group("TPKE");
     group.sample_size(10);
 
-    // let a = share_combine_bench(100, 8192, 150);
-    // group.measurement_time(core::time::Duration::new(30, 0));
-    // group.bench_function("share_combine: threshold 8192*2/3 - #msg 100", |b| {
-    //     b.iter(|| a())
-    // });
-
-    // let a = block_propose_bench(100, 8192, 150);
-    // group.measurement_time(core::time::Duration::new(30, 0));
-    // group.bench_function("block_propose: threshold 8192*2/3 - #msg 100", |b| {
-    //     b.iter(|| a())
-    // });
-
-
     for msg_num in vec![10, 100, 1000].iter() {
         for msg_size in vec![100, 1000, 10000].iter() {
             let a = share_combine_bench(*msg_num, 8192, 150, *msg_size);
