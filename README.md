@@ -1,1 +1,1 @@
-This project has been moved in https://github.com/anoma/ferveo
+This project has been moved in https://github.com/padoc-cloud/group-threshold-crypto
