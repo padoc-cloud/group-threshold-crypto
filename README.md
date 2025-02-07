@@ -1,1 +1,1 @@
-This project has been moved in https://github.com/padoc-cloud/group-threshold-crypto
+This project has been moved to https://github.com/padoc-cloud/group-threshold-crypto
